@@ -127,6 +127,8 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  p->wqj_syscall_trace = 0; //wqj 创建新进程   跟踪掩码设为默认0
+
   return p;
 }
 
@@ -295,7 +297,14 @@ fork(void)
 
   np->state = RUNNABLE;
 
+
+
+  np->wqj_syscall_trace = p->wqj_syscall_trace;  //子进程 继承 父进程 的syscall_trace
+
+ 
   release(&np->lock);
+
+
 
   return pid;
 }
@@ -691,5 +700,17 @@ procdump(void)
       state = "???";
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
+  }
+}
+
+void
+wqj_pronum(uint64 *dst)
+{   
+    *dst = 0;
+    struct proc *p;
+    for(p = proc; p < &proc[NPROC]; p++){
+    if(p->state != UNUSED)
+      (*dst)++;
+    
   }
 }

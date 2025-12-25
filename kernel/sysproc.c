@@ -6,6 +6,7 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "sysinfo.h"
 
 uint64
 sys_exit(void)
@@ -94,4 +95,35 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+
+uint64
+sys_trace(void)
+{
+  int mask;
+
+  if(argint(0,&mask) < 0)
+    return -1;
+
+  myproc()->wqj_syscall_trace = mask;
+  return 0;
+}
+
+
+//收集系统信息
+uint64
+sys_info(void){
+      struct sysinfo info;
+      wqj_freebytes(&info.freemem);//获取空闲内存
+      wqj_pronum(&info.nproc);//获取进程数量
+
+      uint64  dstaddr;
+      argaddr(0,&dstaddr);
+
+      if(copyout(myproc()->pagetable,dstaddr,(char*)&info,sizeof info) < 0)
+          return -1;
+
+      return 0;
+
 }
