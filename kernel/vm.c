@@ -6,6 +6,11 @@
 #include "defs.h"
 #include "fs.h"
 
+//
+int copyin_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len);
+int copyinstr_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max);
+
+
 /*
  * the kernel's page table.
  */
@@ -21,7 +26,7 @@ extern char trampoline[]; // trampoline.S
 void
 kvminit()
 {
-  kernel_pagetable = (pagetable_t) kalloc();
+  kernel_pagetable = (pagetable_t) kalloc();//kalloc总是分配4096字节
   memset(kernel_pagetable, 0, PGSIZE);
 
   // uart registers
@@ -125,14 +130,18 @@ kvmmap(uint64 va, uint64 pa, uint64 sz, int perm)
 // a physical address. only needed for
 // addresses on the stack.
 // assumes va is page aligned.
+//wqj
 uint64
-kvmpa(uint64 va)
+kvmpa(pagetable_t pgtbl,uint64 va)
 {
   uint64 off = va % PGSIZE;
   pte_t *pte;
   uint64 pa;
   
-  pte = walk(kernel_pagetable, va, 0);
+  pte = walk(pgtbl, va, 0);
+
+  //pte = walk(myproc()->kernelpt, va, 0);
+
   if(pte == 0)
     panic("kvmpa");
   if((*pte & PTE_V) == 0)
@@ -166,6 +175,53 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   }
   return 0;
 }
+
+//wqj  proc kernel pagetable
+void 
+uvmmap(pagetable_t pagetable,uint64 va, uint64 pa, uint64 sz, int perm)
+{
+  if(mappages(pagetable, va, sz, pa, perm) != 0)
+    panic("uvmmap");
+}
+
+pagetable_t 
+proc_kpt_init(){
+  pagetable_t kernelpt = uvmcreate();
+ 
+  if(kernelpt == 0)return 0;
+
+  // uart registers
+  uvmmap(kernelpt,UART0, UART0, PGSIZE, PTE_R | PTE_W);
+
+  // virtio mmio disk interface
+  uvmmap(kernelpt,VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+
+  // CLINT
+  //uvmmap(kernelpt,CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+  // CLINT 仅在内核启动的时候需要使用到，而用户进程在内核态中的操作并不需要使用到该映射，并且该映射会与要 map 的程序内存冲突
+
+  // PLIC
+  uvmmap(kernelpt,PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+
+  uvmmap(kernelpt,KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+
+  uvmmap(kernelpt,(uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+
+  uvmmap(kernelpt,TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+
+  return kernelpt;
+}
+
+//加载内核进程页表到SATP寄存器 wqj
+void
+proc_inithart(pagetable_t kpt)
+{
+  w_satp(MAKE_SATP(kpt));
+  sfence_vma();
+}
+
+
+
 
 // Remove npages of mappings starting from va. va must be
 // page-aligned. The mappings must exist.
@@ -373,7 +429,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
   return 0;
 }
 
-// Copy from user to kernel.
+/* // Copy from user to kernel.
 // Copy len bytes to dst from virtual address srcva in a given page table.
 // Return 0 on success, -1 on error.
 int
@@ -439,4 +495,110 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+ */
+//wqj
+int
+copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
+{
+  return copyin_new(pagetable,dst,srcva,len);
+}
+
+int 
+copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
+{
+  return copyinstr_new(pagetable,dst,srcva,max);
+}
+
+void
+_vmprint(pagetable_t pagetable,int depth)
+{
+    for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    
+
+    if(pte & PTE_V){
+      
+      
+
+      uint64 pa = PTE2PA(pte);
+
+      if(depth == 0){
+        printf("..");
+      }
+      else if(depth == 1)
+      {
+        printf(".. ..");
+      }
+      else if(depth == 2)
+      {
+        printf(".. .. ..");
+      }
+      printf("%d: pte %p pa %p\n", i, pte, pa);
+
+       if((pte & (PTE_R|PTE_W|PTE_X)) == 0){
+      // this PTE points to a lower-level page table.
+        pagetable_t child = (pagetable_t)pa;
+        _vmprint(child,depth + 1);
+      }
+    } 
+  }
+}
+
+
+void
+vmprint(pagetable_t pagetable){
+  printf("page table %p\n", pagetable);
+  _vmprint(pagetable, 0);
+}
+
+// 将 src 页表的一部分页映射关系拷贝到 dst 页表中。只拷贝页表项，不拷贝实际的物理页内存
+int
+wqj_kvmcopymappings(pagetable_t src, pagetable_t dst, uint64 start, uint64 sz)
+{
+  pte_t *pte;
+  uint64 pa, i;
+  uint flags;
+
+  // PGROUNDUP: 将地址向上取整到页边界，防止重新映射已经映射的页，特别是在执行growproc操作时
+  for(i = PGROUNDUP(start); i < start + sz; i += PGSIZE)
+  {
+    if((pte = walk(src,i,0)) == 0)
+    {
+      panic("kvmcopymappings: pte should exist");
+    }
+
+    if((*pte & PTE_V) == 0)
+    {
+      panic("kvmcopymappings: page not present");
+    }
+
+    pa = PTE2PA(*pte);
+
+    // `& ~PTE_U` 表示将该页的权限设置为非用户页
+        // 必须设置该权限，因为RISC-V 中内核是无法直接访问用户页的
+    flags = PTE_FLAGS(*pte) & ~PTE_U;
+    if(mappages(dst,i,PGSIZE,pa,flags)!=0)
+      goto err;
+  }
+  return 0;
+
+
+err:
+     uvmunmap(dst,PGROUNDUP(start),(i - PGROUNDUP(start))/PGSIZE,0);
+     return -1;
+}
+
+// 与 uvmdealloc 功能类似，将程序内存从 oldsz 缩减到 newsz，但不释放实际内存
+uint64
+wqj_kvmdealloc(pagetable_t pagetable,uint64 oldsz, uint64 newsz){
+  if(newsz >= oldsz)
+    return oldsz;
+
+  if(PGROUNDUP(newsz) < PGROUNDUP(oldsz)){
+    int npages = (PGROUNDUP(oldsz) - PGROUNDUP(newsz))/ PGSIZE;
+    uvmunmap(pagetable,PGROUNDUP(newsz),npages,0);
+  }
+
+  return newsz;
 }
