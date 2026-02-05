@@ -38,6 +38,7 @@ sys_wait(void)
   return wait(p);
 }
 
+//wqj 0129
 uint64
 sys_sbrk(void)
 {
@@ -47,8 +48,21 @@ sys_sbrk(void)
   if(argint(0, &n) < 0)
     return -1;
   addr = myproc()->sz;
-  if(growproc(n) < 0)
+
+/*   if(growproc(n) < 0)
+    return -1; */
+
+
+  struct proc* p = myproc();
+  //惰性分配 仅改变sz字段
+
+  if(n > 0)
+    p->sz += n;
+  else if(p->sz + n > 0)
+    p->sz = uvmdealloc(p->pagetable,p->sz,p->sz + n);
+  else 
     return -1;
+
   return addr;
 }
 
