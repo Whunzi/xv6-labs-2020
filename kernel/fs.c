@@ -374,7 +374,8 @@ iunlockput(struct inode *ip)
 
 // Return the disk block address of the nth block in inode ip.
 // If there is no such block, bmap allocates one.
-static uint
+
+/* static uint
 bmap(struct inode *ip, uint bn)
 {
   uint addr, *a;
@@ -402,11 +403,93 @@ bmap(struct inode *ip, uint bn)
   }
 
   panic("bmap: out of range");
+} */
+
+//wqj
+static uint
+bmap(struct inode* ip,uint bn)
+{
+  uint addr,*a;
+  struct buf *bp;
+
+
+  if(bn >= NDIRECT + NINDIRECT + NINDIRECT * NINDIRECT) {
+    panic("bmap: block number too large");
+  }
+ // printf("bmap: inode %d, block %d\n", ip->inum, bn);  // 调试输出
+
+  //0
+  if(bn < NDIRECT)
+  {
+    if((addr = ip->addrs[bn]) == 0)
+      ip->addrs[bn] = addr = balloc(ip->dev);
+
+    return addr;
+  }
+
+  bn = bn - NDIRECT;
+
+
+  //1
+  if(bn < NINDIRECT){
+
+    if( (addr = ip->addrs[NDIRECT]) == 0)
+      ip->addrs[NDIRECT] = addr = balloc(ip->dev);
+    
+    bp = bread(ip->dev,addr);
+    a = (uint*)bp->data;
+
+    if((addr = a[bn]) == 0)
+    {
+      a[bn] = addr = balloc(ip->dev);
+      log_write(bp);
+    }
+    brelse(bp);
+    return addr;
+  }
+
+  bn = bn - NINDIRECT;
+
+   if(bn < NINDIRECT * NINDIRECT)
+  {
+    if( (addr = ip->addrs[NDIRECT + 1]) == 0)
+      ip->addrs[NDIRECT + 1] = addr = balloc(ip->dev);
+  
+    bp = bread(ip->dev,addr);
+    a = (uint*)bp->data;
+    
+    if((addr = a[bn/NINDIRECT]) == 0){
+      a[bn / NINDIRECT] = addr = balloc(ip->dev);
+      log_write(bp);
+    }
+    brelse(bp);
+
+
+    bn = bn % NINDIRECT;
+
+    bp = bread(ip->dev,addr);
+    a = (uint*)bp->data;
+    if((addr = a[bn]) == 0)
+    {
+      a[bn]= addr = balloc(ip->dev);
+      log_write(bp);
+    }
+    brelse(bp);
+    return addr;
+
+  } 
+
+  
+
+  panic("bmap:out of range");
+
 }
+
 
 // Truncate inode (discard contents).
 // Caller must hold ip->lock.
-void
+
+/* void
 itrunc(struct inode *ip)
 {
   int i, j;
@@ -434,7 +517,77 @@ itrunc(struct inode *ip)
 
   ip->size = 0;
   iupdate(ip);
+} */
+
+//wqj
+void
+itrunc(struct inode *ip)
+{
+  int i,j;
+  struct buf *bp;
+  uint *a;
+
+
+  //释放直接块
+  for(i = 0; i < NDIRECT; i++){
+    if(ip->addrs[i]){
+      bfree(ip->dev, ip->addrs[i]);
+      ip->addrs[i] = 0;
+    }
+  }
+
+  //释放一级间接块
+  if(ip->addrs[NDIRECT]){
+    bp = bread(ip->dev, ip->addrs[NDIRECT]);
+    a = (uint*)bp->data;
+    for(j = 0; j < NINDIRECT; j++){
+      if(a[j])
+        {
+          bfree(ip->dev, a[j]);
+        a[j] = 0;//wqj 清空指针
+        }
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT]);
+    ip->addrs[NDIRECT] = 0;
+  }
+
+  //释放二级间接块
+  if(ip->addrs[NDIRECT + 1]){
+    bp = bread(ip->dev, ip->addrs[NDIRECT + 1]);
+    a = (uint*)bp->data;
+    for(int i = 0; i < NINDIRECT; ++i)
+    {
+        if(a[i]){
+            struct buf* bp2 = bread(ip->dev, a[i]);
+            uint* a2 = (uint*)bp2->data;
+            for(int j = 0;j < NINDIRECT;++j)
+            {
+              if(a2[j])
+                {
+                bfree(ip->dev,a2[j]);
+                a2[j] = 0; //wqj 清空指针
+                }
+            }
+            brelse(bp2);
+
+
+            bfree(ip->dev,a[i]);
+            a[i] = 0; //清空指针
+        }
+    }
+
+      brelse(bp);
+      bfree(ip->dev,ip->addrs[NDIRECT + 1]);
+      ip->addrs[NDIRECT + 1] = 0;
+  }
+
+  ip->size = 0;
+  iupdate(ip);
+
 }
+
+
 
 // Copy stat information from inode.
 // Caller must hold ip->lock.

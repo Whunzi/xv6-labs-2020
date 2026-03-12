@@ -1,6 +1,10 @@
 #define T_DIR     1   // Directory
 #define T_FILE    2   // File
 #define T_DEVICE  3   // Device
+//wqj
+#define T_SYMLINK 4 // 软链接
+
+
 
 struct stat {
   int dev;     // File system's disk device

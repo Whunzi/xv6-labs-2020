@@ -3,3 +3,5 @@
 #define O_RDWR    0x002
 #define O_CREATE  0x200
 #define O_TRUNC   0x400
+//wqj  添加新的文件标志位 用于open系统调用
+#define O_NOFOLLOW 0x800
