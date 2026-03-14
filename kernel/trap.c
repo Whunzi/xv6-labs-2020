@@ -67,7 +67,23 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  } 
+    else if(r_scause() == 13 || r_scause() == 15){
+      //wqj
+      uint64 va = r_stval();//读取当前发生页面错误的地址
+
+
+      if(vmaalloc(va) != 0){
+        //成功通过vma分配物理页，继续执行
+      }else
+        {
+          // VMA 分配失败，可能是非法地址
+          //printf("usertrap: vmaalloc failed for va=%p in process %d\n", va, p->pid);
+          p->killed = 1;
+        }
+      
+    }
+  else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;

@@ -6,6 +6,13 @@
 #include "defs.h"
 #include "fs.h"
 
+//wqj
+#include "fcntl.h"
+#include "spinlock.h"
+#include "sleeplock.h"
+#include "file.h"
+#include "proc.h"
+
 /*
  * the kernel's page table.
  */
@@ -170,9 +177,11 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
-      panic("uvmunmap: walk");
+      //panic("uvmunmap: walk");
+      continue; //wqj
     if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
+      //panic("uvmunmap: not mapped");
+      continue; //wqj
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
@@ -427,5 +436,45 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return 0;
   } else {
     return -1;
+  }
+}
+
+//wqj 释放mmap映射的页 根据PTE_D和MAP_SHARED判断是否将修改写回磁盘
+
+void vmaunmap(pagetable_t pagetable, uint64 va,uint64 nbytes,struct wqj_vma* v){
+  uint64 a;
+  pte_t* pte;
+
+  for(a = va; a < va + nbytes; a = a + PGSIZE){
+    if((pte = walk(pagetable,a,0)) == 0){
+      continue;
+    }
+
+    if(PTE_FLAGS(*pte) == PTE_V){
+      panic("sys_munmap: not a leaf");
+    }
+
+    if(*pte & PTE_V)
+    {
+      uint64 pa = PTE2PA(*pte);
+      if( (*pte &PTE_D) && (v->flags & MAP_SHARED)){ //将修改写回磁盘
+        begin_op();
+        ilock(v->f->ip);
+        uint64 aoff = a - v->vastart;
+
+        if(aoff < 0)
+          writei(v->f->ip, 0, pa + (-aoff),v->offset,PGSIZE + aoff);
+        else if(aoff + PGSIZE > v->sz)
+          writei(v->f->ip, 0, pa, v->offset + aoff, v->sz - aoff);
+        else
+          writei(v->f->ip, 0, pa, v->offset + aoff, PGSIZE);
+
+        iunlock(v->f->ip);
+        end_op();
+
+        }
+        //kfree((void*)pa); //wqj 不应该释放？
+        *pte = 0;
+    }
   }
 }

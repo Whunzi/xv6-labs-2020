@@ -134,6 +134,10 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  //初始化时清空vmas数组
+  for(int i = 0; i < NVMA; ++i)
+    p->vmas[i].valid = 0;
+
   return p;
 }
 
@@ -146,6 +150,23 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+  
+  
+  //释放页表前清空vmas数组
+  for(int i = 0; i < NVMA; ++i){
+    struct wqj_vma* v = &p->vmas[i];
+    if(v->valid) {
+      // 取消映射
+      vmaunmap(p->pagetable, v->vastart, v->sz, v);
+      // 关闭文件
+      if(v->f) {
+        fileclose(v->f);
+      }
+      v->valid = 0;
+      v->f = 0;
+    }
+  }
+
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
@@ -296,6 +317,20 @@ fork(void)
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
+  //父进程vmas复制到子进程中，实际内存页和PTE不会被复制 wqj
+   for(int i = 0; i < NVMA; ++i)
+   {
+    struct wqj_vma* v = &p->vmas[i];
+    if(v->valid){
+      np->vmas[i] = *v;
+      
+      if(v->f){
+      filedup(v->f);
+      }
+    }
+   }
+
+
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
@@ -344,6 +379,7 @@ exit(int status)
   if(p == initproc)
     panic("init exiting");
 
+
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){
     if(p->ofile[fd]){
@@ -352,6 +388,23 @@ exit(int status)
       p->ofile[fd] = 0;
     }
   }
+
+  //wqj 清理vma  ???
+  for(int i = 0; i < NVMA; i++) {
+    if(p->vmas[i].valid) {
+      // 取消映射
+      vmaunmap(p->pagetable, p->vmas[i].vastart, p->vmas[i].sz, &p->vmas[i]);
+      // 关闭文件
+      if(p->vmas[i].f) {
+        fileclose(p->vmas[i].f);
+      }
+      // 标记 VMA 为无效
+      p->vmas[i].valid = 0;
+      p->vmas[i].f = 0;
+    }
+  }
+
+    
 
   begin_op();
   iput(p->cwd);
